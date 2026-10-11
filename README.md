@@ -251,50 +251,63 @@ Do not deploy without verifying persistent storage. Requirements:
 
 ## Deploying on free tiers (Vercel frontend + Render backend)
 
-The app is designed to run entirely on free tiers. The frontend is served by
-Vercel and the API by Render; Vercel proxies `/api/*` to Render so the browser
-only ever talks to one origin. That keeps the session cookie first-party, so no
-cross-site cookie or CORS problems arise.
+The app runs entirely on free tiers: the React app is hosted by Vercel and the
+API by Render, and the frontend calls the backend directly.
 
 ```text
-Browser -> https://<app>.vercel.app            (static React app)
-             |  /api/* (rewritten/proxied)
+Browser -> https://<app>.vercel.app              (static React app)
+             |  fetch https://<render-service>.onrender.com/api/v1/*
              v
-        https://<render-service>.onrender.com  (FastAPI + SQLite + uploads)
+        https://<render-service>.onrender.com    (FastAPI + SQLite + uploads)
 ```
 
 **1. Backend on Render**
 
 1. Push this repo to GitHub.
-2. In Render: **New + -> Blueprint**, pick the repo, and apply. `render.yaml`
-   creates a free web service from `backend/` with the right start command,
-   generates `NOTENEST_SECRET_KEY`, and sets `NOTENEST_SEED_ON_STARTUP=true`.
-3. When prompted, set `NOTENEST_CORS_ORIGINS` to your Vercel URL
-   (`https://<app>.vercel.app`). You can add it later under the service's
-   **Environment** tab too.
-4. Wait for the first deploy. Note the service URL, for example
+2. In Render: **New + -> Web Service**, connect the repo.
+3. Settings:
+
+   | Field | Value |
+   | --- | --- |
+   | Root Directory | `backend` |
+   | Runtime | Python 3 |
+   | Build Command | `pip install -r requirements.txt` |
+   | Start Command | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+   | Instance Type | Free |
+   | Health Check Path | `/health` |
+
+4. Environment variables:
+
+   | Key | Value |
+   | --- | --- |
+   | `PYTHON_VERSION` | `3.12.2` |
+   | `NOTENEST_SECRET_KEY` | a long random string (32+ characters) |
+   | `NOTENEST_COOKIE_SECURE` | `true` |
+   | `NOTENEST_COOKIE_SAMESITE` | `none` |
+   | `NOTENEST_SEED_ON_STARTUP` | `true` |
+   | `NOTENEST_CORS_ORIGINS` | `https://<app>.vercel.app` |
+
+5. Deploy and note the service URL, for example
    `https://notenest-api.onrender.com`. Check `https://<service>/health`.
 
-**2. Point the frontend at that URL**
+The frontend and API are on different sites, so the session cookie must be
+cross-site: use `NOTENEST_COOKIE_SAMESITE=none` together with
+`NOTENEST_COOKIE_SECURE=true` (browsers require `Secure` for `SameSite=None`).
 
-Edit `frontend/vercel.json` and replace the placeholder host in the `/api`
-rewrite destination with your Render service host:
-
-```json
-{ "source": "/api/:path*", "destination": "https://<render-service>.onrender.com/api/:path*" }
-```
-
-Then commit and push that change.
-
-**3. Frontend on Vercel**
+**2. Frontend on Vercel**
 
 1. In Vercel: **Add New -> Project**, import the repo.
 2. Set **Root Directory** to `frontend`. Vercel detects Vite; the build command
    `npm run build` and output `dist` are correct.
-3. No environment variables are needed: production builds call the same-origin
-   `/api/v1`, which Vercel proxies to Render.
-4. Deploy, then copy the Vercel URL into `NOTENEST_CORS_ORIGINS` on Render
-   (step 1.3) and redeploy the backend if needed.
+3. Add an environment variable **`VITE_API_BASE_URL`** set to
+   `https://<render-service>.onrender.com/api/v1` (your Render URL). It is read
+   at build time, so set it before deploying and redeploy after changing it.
+4. Deploy and copy the Vercel URL.
+
+**3. Connect the two**
+
+Set `NOTENEST_CORS_ORIGINS` on Render to the Vercel URL from step 2.4 and
+redeploy the backend so the Origin check and CORS allow it.
 
 **Free-tier caveats**
 
@@ -305,8 +318,11 @@ Then commit and push that change.
   disk (paid) or move to managed Postgres plus object storage.
 - Render free services **sleep after ~15 minutes idle**; the first request then
   takes 30-60 seconds to wake. Open the site once before sharing it.
-- The frontend has no environment variables to configure; the only file that
-  ties the two services together is `frontend/vercel.json`.
+- **Cross-site cookies:** this direct-URL setup uses `SameSite=None; Secure`.
+  Some browsers (notably Safari) restrict cross-site cookies and can drop the
+  session. Proxying the API through the frontend origin (a Vercel `rewrites`
+  rule) avoids this by keeping the cookie first-party; it is not configured
+  here and can be added later if sign-in proves flaky.
 
 ## Running a production build locally
 
@@ -315,7 +331,6 @@ Then commit and push that change.
 npm run build
 npm run preview
 ```
-
 
 ## Project layout
 
@@ -330,9 +345,7 @@ frontend/
   src/            React app (pages, components, api client, auth, ChaiUI theme)
   index.html
   vite.config.js
-  vercel.json     Vercel rewrites (API proxy to the backend + SPA fallback)
   .env.example    Frontend environment placeholders
-render.yaml       Render blueprint for the backend (free plan)
 README.md         This file
 LICENSE           MIT license
 ```
