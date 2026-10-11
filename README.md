@@ -268,7 +268,10 @@ frontend/
   index.html
   vite.config.js
   .env.example    Frontend environment placeholders
-PRD.md            Product requirements
-PHASE_*.md        Phase specifications
-AGENTS.md         Working rules for the coding agent
+README.md         This file
+LICENSE           MIT license
 ```
+
+## License
+
+Released under the MIT License. See [LICENSE](LICENSE).

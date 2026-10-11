@@ -12,7 +12,7 @@ export function Footer() {
           Made by{' '}
           <span className="font-medium text-foreground">Hiresh Yadav</span>
         </span>
-        <span>© {YEAR} NoteNest. All rights reserved.</span>
+        <span>© {YEAR} NoteNest. MIT licensed.</span>
       </div>
     </footer>
   )
