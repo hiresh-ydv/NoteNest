@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { FileUp, MailCheck, Upload } from 'lucide-react'
+import { FileUp, Upload } from 'lucide-react'
 
 import { ApiError } from '../api/client.js'
 import { createNote } from '../api/notes.js'
@@ -47,7 +47,7 @@ function validate(values) {
 export default function UploadNote() {
   const navigate = useNavigate()
   const fileInputRef = useRef(null)
-  const { status, isVerified } = useAuth()
+  const { status } = useAuth()
 
   const [values, setValues] = useState({
     title: '',
@@ -104,11 +104,6 @@ export default function UploadNote() {
         navigate('/login', { state: { from: '/upload' } })
         return
       }
-      // Email not verified: send the user to the verification step.
-      if (error instanceof ApiError && error.status === 403) {
-        navigate('/verify-email', { state: { from: '/upload' } })
-        return
-      }
       setSubmitError(error.message)
       setSubmitting(false)
     }
@@ -120,26 +115,6 @@ export default function UploadNote() {
 
   if (status === 'anonymous') {
     return <Navigate to="/login" state={{ from: '/upload' }} replace />
-  }
-
-  if (!isVerified) {
-    return (
-      <div className="mx-auto flex max-w-md flex-col items-center gap-4 py-10 text-center">
-        <span className="flex size-12 items-center justify-center rounded-full border border-card-edge">
-          <MailCheck className="size-5 text-brand" aria-hidden="true" />
-        </span>
-        <h1 className="font-display text-3xl font-semibold tracking-tight text-foreground">
-          Verify to <span className="highlight">upload</span>
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Confirm your email address before uploading notes. It only takes a
-          moment.
-        </p>
-        <Button to="/verify-email" state={{ from: '/upload' }}>
-          Verify email
-        </Button>
-      </div>
-    )
   }
 
   return (

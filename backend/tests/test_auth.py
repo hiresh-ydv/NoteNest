@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-import support
 from app.config import get_settings
 from app.models import Note, User
 from app.security import create_access_token
@@ -49,7 +47,6 @@ def test_valid_registration_succeeds(client: TestClient) -> None:
     body = response.json()
     assert body["email"] == "student@example.com"
     assert body["id"] > 0
-    assert body["email_verified"] is False
     assert "created_at" in body
 
 
@@ -207,27 +204,12 @@ def test_unauthenticated_upload_is_rejected(
 def test_authenticated_upload_succeeds(
     session: Session, client: TestClient, upload_dir: Path
 ) -> None:
-    support.register(client)
+    _register(client)
 
     response = _upload(client)
 
     assert response.status_code == 201
     assert session.scalar(select(func.count()).select_from(Note)) == 1
-
-
-def test_upload_blocked_until_email_verified(
-    session: Session, client: TestClient, upload_dir: Path
-) -> None:
-    _register(client)
-
-    response = _upload(client)
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == (
-        "Verify your email address before uploading notes"
-    )
-    assert session.scalar(select(func.count()).select_from(Note)) == 0
-    assert list(upload_dir.iterdir()) == []
 
 
 def test_public_endpoints_require_no_auth(client: TestClient) -> None:
@@ -246,120 +228,3 @@ def test_seeded_notes_survive_account_creation(
 
     after = client.get(NOTES).json()["total"]
     assert after == before
-
-
-# --- Email verification (OTP) --------------------------------------------
-
-
-def _code(client: TestClient, email: str = CREDENTIALS["email"]) -> str:
-    """Return the latest code the fake mailer captured for ``email``."""
-
-    return support.code_for(email)
-
-
-def test_new_account_starts_unverified(client: TestClient) -> None:
-    body = _register(client).json()
-
-    assert body["email_verified"] is False
-    assert client.get(f"{AUTH}/me").json()["email_verified"] is False
-
-
-def test_verify_email_with_correct_code(client: TestClient) -> None:
-    _register(client)
-
-    response = client.post(f"{AUTH}/verify-email", json={"code": _code(client)})
-
-    assert response.status_code == 200
-    assert response.json()["email_verified"] is True
-    assert client.get(f"{AUTH}/me").json()["email_verified"] is True
-
-
-def test_verify_email_with_wrong_code(client: TestClient) -> None:
-    _register(client)
-
-    response = client.post(f"{AUTH}/verify-email", json={"code": "000000"})
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Incorrect code"
-    assert client.get(f"{AUTH}/me").json()["email_verified"] is False
-
-
-def test_verify_email_with_expired_code(client: TestClient, session: Session) -> None:
-    _register(client)
-    user = session.scalars(select(User)).one()
-    user.otp_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
-    session.commit()
-
-    response = client.post(f"{AUTH}/verify-email", json={"code": "000000"})
-
-    assert response.status_code == 400
-    assert "expired" in response.json()["detail"].lower()
-
-
-def test_too_many_invalid_attempts_locks_the_code(client: TestClient) -> None:
-    _register(client)
-    settings = get_settings()
-
-    for _ in range(settings.otp_max_attempts):
-        attempt = client.post(f"{AUTH}/verify-email", json={"code": "000000"})
-        assert attempt.status_code == 400
-
-    locked = client.post(f"{AUTH}/verify-email", json={"code": "000000"})
-    assert locked.status_code == 429
-
-
-def test_verifying_an_already_verified_email_is_idempotent(
-    client: TestClient,
-) -> None:
-    _register(client)
-    client.post(f"{AUTH}/verify-email", json={"code": _code(client)})
-
-    again = client.post(f"{AUTH}/verify-email", json={"code": "000000"})
-
-    assert again.status_code == 200
-    assert again.json()["email_verified"] is True
-
-
-def test_verify_email_requires_authentication(client: TestClient) -> None:
-    response = client.post(f"{AUTH}/verify-email", json={"code": "123456"})
-
-    assert response.status_code == 401
-
-
-def test_resend_otp_requires_authentication(client: TestClient) -> None:
-    assert client.post(f"{AUTH}/resend-otp").status_code == 401
-
-
-def test_resend_otp_enforces_cooldown(client: TestClient) -> None:
-    _register(client)
-
-    response = client.post(f"{AUTH}/resend-otp")
-
-    assert response.status_code == 429
-    assert "seconds" in response.json()["detail"]
-
-
-def test_resend_otp_after_cooldown_issues_a_new_code(
-    client: TestClient, session: Session
-) -> None:
-    _register(client)
-    settings = get_settings()
-    user = session.scalars(select(User)).one()
-    user.otp_last_sent_at = datetime.now(timezone.utc) - timedelta(
-        seconds=settings.otp_resend_cooldown_seconds + 1
-    )
-    session.commit()
-
-    response = client.post(f"{AUTH}/resend-otp")
-
-    assert response.status_code == 200
-    assert response.json()["detail"] == "A new verification code has been sent."
-
-
-def test_resend_otp_rejected_once_verified(client: TestClient) -> None:
-    _register(client)
-    client.post(f"{AUTH}/verify-email", json={"code": _code(client)})
-
-    response = client.post(f"{AUTH}/resend-otp")
-
-    assert response.status_code == 400

@@ -10,16 +10,7 @@ from __future__ import annotations
 import math
 from typing import Annotated, Literal
 
-from fastapi import (
-    APIRouter,
-    Depends,
-    File,
-    Form,
-    HTTPException,
-    Query,
-    UploadFile,
-    status,
-)
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
@@ -146,16 +137,9 @@ def create_note(
     """Store the PDF, then persist its metadata.
 
     Only authenticated users may upload; listing and downloads stay public.
-    The uploader's email must be verified first. The file is validated and
-    written first; if the database write then fails, the new file is removed so
-    storage and the database stay consistent.
+    The file is validated and written first; if the database write then fails,
+    the new file is removed so storage and the database stay consistent.
     """
-
-    if not current_user.email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Verify your email address before uploading notes",
-        )
 
     saved = files.save_pdf(file, settings.upload_dir, settings.max_upload_size)
 

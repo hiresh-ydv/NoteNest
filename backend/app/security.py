@@ -10,7 +10,6 @@ tested directly and reused by the auth dependency and routes.
 
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -39,12 +38,6 @@ def verify_password(password_hash: str, password: str) -> bool:
         return _hasher.verify(password_hash, password)
     except (VerifyMismatchError, InvalidHashError, ValueError):
         return False
-
-
-def generate_otp(length: int) -> str:
-    """Return a random numeric one-time code of ``length`` digits."""
-
-    return "".join(secrets.choice("0123456789") for _ in range(length))
 
 
 def create_access_token(

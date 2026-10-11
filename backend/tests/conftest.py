@@ -16,8 +16,6 @@ from pathlib import Path
 import pytest
 from sqlalchemy.orm import Session
 
-import support
-
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="notenest-tests-"))
 
 os.environ["NOTENEST_DATABASE_URL"] = (
@@ -44,16 +42,6 @@ def _isolated_environment() -> Iterator[None]:
     yield
     engine.dispose()
     shutil.rmtree(_TMP_DIR, ignore_errors=True)
-
-
-@pytest.fixture(autouse=True)
-def _fake_email(monkeypatch) -> None:
-    """Capture OTP codes instead of sending real mail (no network at all)."""
-
-    support.OUTBOX.clear()
-    monkeypatch.setattr("app.routers.auth.email_service.send_otp_email", support.fake_send_otp_email)
-    yield
-    support.OUTBOX.clear()
 
 
 @pytest.fixture()

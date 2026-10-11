@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-import support
 from app.config import DEFAULT_MAX_UPLOAD_SIZE
 from app.database import SessionLocal, get_session
 from app.main import app
@@ -62,9 +61,14 @@ def _upload(
 
 
 def _register(client: TestClient) -> TestClient:
-    """Register and email-verify a demo user on this client."""
+    """Register a demo user on this client (the session cookie is stored)."""
 
-    return support.register(client)
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "uploader@example.com", "password": "password123"},
+    )
+    assert response.status_code == 201
+    return client
 
 
 def test_default_max_upload_size_is_ten_megabytes() -> None:
