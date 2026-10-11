@@ -1,0 +1,25 @@
+# NoteNest root ignore rules
+# (per-app rules also live in backend/.gitignore and frontend/.gitignore)
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Node / frontend build
+node_modules/
+dist/
+*.local
+
+# Local development data (never commit the database or uploaded documents)
+backend/notenest.db
+*.db
+backend/uploads/
