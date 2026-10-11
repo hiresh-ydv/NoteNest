@@ -138,12 +138,13 @@ Backend (all optional, with development defaults):
 | `NOTENEST_COOKIE_NAME` | `notenest_session` | Session cookie name |
 | `NOTENEST_COOKIE_SECURE` | `false` | Send the cookie only over HTTPS (set `true` in production) |
 | `NOTENEST_COOKIE_SAMESITE` | `lax` | Session cookie SameSite policy |
+| `NOTENEST_SEED_ON_STARTUP` | `false` | Load demo notes on startup when the library is empty (for ephemeral hosts) |
 
 Frontend:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VITE_API_BASE_URL` | `http://localhost:8000/api/v1` | Base URL of the backend API |
+| `VITE_API_BASE_URL` | `http://localhost:8000/api/v1` (dev); `/api/v1` (prod) | Base URL of the backend API |
 
 The only secret is `NOTENEST_SECRET_KEY`. The development default is an
 insecure placeholder; always set a real, long, random value in production and
@@ -241,18 +242,80 @@ Do not deploy without verifying persistent storage. Requirements:
 - **Persistent database storage:** a durable volume or a managed database.
 - **Persistent PDF storage:** a durable volume or object storage.
 - **Correct frontend API URL:** set `VITE_API_BASE_URL` at build time to the
-  deployed backend URL.
+  deployed backend URL (production builds default to the same-origin `/api/v1`).
 - **Correct CORS origins:** set `NOTENEST_CORS_ORIGINS` to the deployed
   frontend origin.
 - **Auth hardening:** set a long random `NOTENEST_SECRET_KEY`, serve over
   HTTPS, and set `NOTENEST_COOKIE_SECURE=true`.
 - **Environment variables:** configure all of the variables listed above.
 
-> **Persistence warning:** SQLite and local uploads live on the host's
-> filesystem. If the host uses an ephemeral filesystem, that data is lost on
-> redeploy or restart. Use persistent volumes, a managed database, and object
-> storage for anything beyond a demo, and verify the host's configuration
-> rather than assuming local files survive.
+## Deploying on free tiers (Vercel frontend + Render backend)
+
+The app is designed to run entirely on free tiers. The frontend is served by
+Vercel and the API by Render; Vercel proxies `/api/*` to Render so the browser
+only ever talks to one origin. That keeps the session cookie first-party, so no
+cross-site cookie or CORS problems arise.
+
+```text
+Browser -> https://<app>.vercel.app            (static React app)
+             |  /api/* (rewritten/proxied)
+             v
+        https://<render-service>.onrender.com  (FastAPI + SQLite + uploads)
+```
+
+**1. Backend on Render**
+
+1. Push this repo to GitHub.
+2. In Render: **New + -> Blueprint**, pick the repo, and apply. `render.yaml`
+   creates a free web service from `backend/` with the right start command,
+   generates `NOTENEST_SECRET_KEY`, and sets `NOTENEST_SEED_ON_STARTUP=true`.
+3. When prompted, set `NOTENEST_CORS_ORIGINS` to your Vercel URL
+   (`https://<app>.vercel.app`). You can add it later under the service's
+   **Environment** tab too.
+4. Wait for the first deploy. Note the service URL, for example
+   `https://notenest-api.onrender.com`. Check `https://<service>/health`.
+
+**2. Point the frontend at that URL**
+
+Edit `frontend/vercel.json` and replace the placeholder host in the `/api`
+rewrite destination with your Render service host:
+
+```json
+{ "source": "/api/:path*", "destination": "https://<render-service>.onrender.com/api/:path*" }
+```
+
+Then commit and push that change.
+
+**3. Frontend on Vercel**
+
+1. In Vercel: **Add New -> Project**, import the repo.
+2. Set **Root Directory** to `frontend`. Vercel detects Vite; the build command
+   `npm run build` and output `dist` are correct.
+3. No environment variables are needed: production builds call the same-origin
+   `/api/v1`, which Vercel proxies to Render.
+4. Deploy, then copy the Vercel URL into `NOTENEST_CORS_ORIGINS` on Render
+   (step 1.3) and redeploy the backend if needed.
+
+**Free-tier caveats**
+
+- Render's free plan has an **ephemeral filesystem**: the SQLite database and
+  uploaded PDFs reset on every restart or redeploy. `NOTENEST_SEED_ON_STARTUP`
+  reloads the demo notes on each boot, so the site is never empty, but accounts
+  and uploads do not survive a restart. For lasting data, attach a persistent
+  disk (paid) or move to managed Postgres plus object storage.
+- Render free services **sleep after ~15 minutes idle**; the first request then
+  takes 30-60 seconds to wake. Open the site once before sharing it.
+- The frontend has no environment variables to configure; the only file that
+  ties the two services together is `frontend/vercel.json`.
+
+## Running a production build locally
+
+```powershell
+# Build the frontend and serve it (still talks to the local API)
+npm run build
+npm run preview
+```
+
 
 ## Project layout
 
@@ -267,7 +330,9 @@ frontend/
   src/            React app (pages, components, api client, auth, ChaiUI theme)
   index.html
   vite.config.js
+  vercel.json     Vercel rewrites (API proxy to the backend + SPA fallback)
   .env.example    Frontend environment placeholders
+render.yaml       Render blueprint for the backend (free plan)
 README.md         This file
 LICENSE           MIT license
 ```

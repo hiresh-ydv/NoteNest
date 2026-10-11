@@ -35,6 +35,7 @@ class Settings:
     cookie_name: str
     cookie_secure: bool
     cookie_samesite: str
+    seed_on_startup: bool
 
 
 def _default_database_url() -> str:
@@ -81,4 +82,5 @@ def get_settings() -> Settings:
         cookie_name=os.getenv("NOTENEST_COOKIE_NAME", "notenest_session"),
         cookie_secure=_env_bool("NOTENEST_COOKIE_SECURE", False),
         cookie_samesite=os.getenv("NOTENEST_COOKIE_SAMESITE", "lax"),
+        seed_on_startup=_env_bool("NOTENEST_SEED_ON_STARTUP", False),
     )

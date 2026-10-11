@@ -13,16 +13,35 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from app.config import get_settings
-from app.database import init_db
+from app.database import SessionLocal, init_db
 from app.routers import auth, notes
+from app.seed import seed_notes
 from app.services.files import FileValidationError
 
 settings = get_settings()
 
 
+def _seed_if_configured() -> None:
+    """Populate demo notes when NOTENEST_SEED_ON_STARTUP is enabled.
+
+    Hosting free tiers (for example Render's free plan) have an ephemeral
+    filesystem, so the database is recreated empty on every restart. Seeding is
+    idempotent: existing notes are skipped and nothing is ever deleted.
+    """
+
+    if not settings.seed_on_startup:
+        return
+    session = SessionLocal()
+    try:
+        seed_notes(session, settings.upload_dir, settings.max_upload_size)
+    finally:
+        session.close()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    _seed_if_configured()
     yield
 
 
