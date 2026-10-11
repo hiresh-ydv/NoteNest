@@ -8,7 +8,14 @@ import {
 } from 'react'
 
 import { ApiError } from '../api/client.js'
-import { getMe, loginUser, logoutUser, registerUser } from '../api/auth.js'
+import {
+  getMe,
+  loginUser,
+  logoutUser,
+  registerUser,
+  resendOtp as resendOtpRequest,
+  verifyEmail as verifyEmailRequest,
+} from '../api/auth.js'
 
 const AuthContext = createContext(null)
 
@@ -62,9 +69,28 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
+  const verifyEmail = useCallback(async (code) => {
+    const data = await verifyEmailRequest(code)
+    setUser(data)
+    return data
+  }, [])
+
+  const resendOtp = useCallback(async () => {
+    return resendOtpRequest()
+  }, [])
+
   const value = useMemo(
-    () => ({ user, status, login, register, logout }),
-    [user, status, login, register, logout],
+    () => ({
+      user,
+      status,
+      isVerified: Boolean(user?.email_verified),
+      login,
+      register,
+      logout,
+      verifyEmail,
+      resendOtp,
+    }),
+    [user, status, login, register, logout, verifyEmail, resendOtp],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
-import { LogOut } from 'lucide-react'
+import { LogOut, MailWarning } from 'lucide-react'
 
 import { useAuth } from '../auth/AuthContext.jsx'
 import { ThemeToggle } from './ThemeToggle.jsx'
@@ -15,7 +15,7 @@ function navLinkClass({ isActive }) {
 
 export function Navbar() {
   const [scrolled, setScrolled] = useState(false)
-  const { user, status, logout } = useAuth()
+  const { user, status, isVerified, logout } = useAuth()
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -53,6 +53,15 @@ export function Navbar() {
 
           {status === 'authenticated' ? (
             <div className="flex items-center gap-3">
+              {!isVerified ? (
+                <NavLink
+                  to="/verify-email"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors duration-200 hover:text-brand"
+                >
+                  <MailWarning className="size-4" aria-hidden="true" />
+                  Verify email
+                </NavLink>
+              ) : null}
               <span className="hidden max-w-40 truncate text-sm text-muted-foreground sm:inline">
                 {user?.email}
               </span>

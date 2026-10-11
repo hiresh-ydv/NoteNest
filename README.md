@@ -16,6 +16,10 @@ testable MVP.
 - Sorting by `newest` or `downloads` and paginated results.
 - Account registration and login (email + password) with a signed,
   HttpOnly session cookie.
+- Email verification: a 6-digit one-time code is emailed at signup; uploading
+  is blocked until the code is confirmed (browsing and downloads stay open).
+  Codes are hashed at rest, expire after 10 minutes, cap failed attempts, and
+  resend is rate-limited.
 - Upload a PDF with metadata (title, description, subject, year, semester,
   topic) while logged in.
 - Note detail page with metadata, file size, upload date, and download count.
@@ -24,7 +28,7 @@ testable MVP.
 - Responsive, dark-first UI following the ChaiUI design skill.
 
 Explicitly out of scope: upload ownership/roles, comments, ratings, bookmarks,
-profiles, admin/moderation tools, password reset, email verification, AI
+profiles, admin/moderation tools, password reset, passwordless login, AI
 features, and recommendations.
 
 ## Architecture overview
@@ -60,8 +64,11 @@ Responsibilities:
 - **SQLite:** user accounts plus note metadata and counters (never PDF bytes).
 - **File service (`backend/app/services/files.py`):** PDF validation, safe
   random filenames, storage, safe path resolution, and cleanup.
-- **Security (`backend/app/security.py`):** Argon2id password hashing and JWT
-  session tokens.
+- **Security (`backend/app/security.py`):** Argon2id password and OTP hashing,
+  one-time-code generation, and JWT session tokens.
+- **Email (`backend/app/email.py`):** sends the verification code over SMTP
+  using only the standard library; when SMTP is not configured it writes the
+  code to the log instead (development and tests run fully offline).
 - The frontend only talks to the REST API; it never touches SQLite or server
   files directly.
 
@@ -70,8 +77,9 @@ Responsibilities:
 - **Frontend:** React 19, Vite, JavaScript, React Router, Tailwind CSS v4, and
   the ChaiUI design tokens/utilities. HTTP via the browser Fetch API.
 - **Backend:** Python, FastAPI, Pydantic v2, SQLAlchemy 2.x, SQLite,
-  `python-multipart`, `uvicorn`, `argon2-cffi` (password hashing), `PyJWT`
-  (session tokens), and `email-validator`.
+  `python-multipart`, `uvicorn`, `argon2-cffi` (password and OTP hashing),
+  `PyJWT` (session tokens), `email-validator`, and the standard-library
+  `smtplib` for outbound email.
 - **Tests:** `pytest` and the FastAPI `TestClient` (`httpx`).
 - **Storage:** SQLite for metadata, local filesystem for PDFs (development).
 
@@ -139,6 +147,16 @@ Backend (all optional, with development defaults):
 | `NOTENEST_COOKIE_SECURE` | `false` | Send the cookie only over HTTPS (set `true` in production) |
 | `NOTENEST_COOKIE_SAMESITE` | `lax` | Session cookie SameSite policy |
 | `NOTENEST_SEED_ON_STARTUP` | `false` | Load demo notes on startup when the library is empty (for ephemeral hosts) |
+| `NOTENEST_SMTP_HOST` | `smtp.gmail.com` | SMTP server for verification email |
+| `NOTENEST_SMTP_PORT` | `587` | SMTP port |
+| `NOTENEST_SMTP_USE_TLS` | `true` | Use STARTTLS for the SMTP connection |
+| `NOTENEST_SMTP_USER` | *(empty)* | SMTP username; empty disables real sending (codes are logged instead) |
+| `NOTENEST_SMTP_PASSWORD` | *(empty)* | SMTP password or app password |
+| `NOTENEST_SMTP_FROM` | *(empty)* | From address; defaults to `NOTENEST_SMTP_USER` |
+| `NOTENEST_OTP_LENGTH` | `6` | Number of digits in the verification code |
+| `NOTENEST_OTP_TTL_SECONDS` | `600` (10 min) | How long a code stays valid |
+| `NOTENEST_OTP_MAX_ATTEMPTS` | `5` | Wrong guesses allowed before a new code is required |
+| `NOTENEST_OTP_RESEND_COOLDOWN_SECONDS` | `60` | Minimum wait between resend requests |
 
 Frontend:
 
@@ -149,6 +167,24 @@ Frontend:
 The only secret is `NOTENEST_SECRET_KEY`. The development default is an
 insecure placeholder; always set a real, long, random value in production and
 never commit a real `.env` file. `backend/.env.example` lists every setting.
+
+### Email verification setup (optional)
+
+Email sending is off by default: with `NOTENEST_SMTP_USER` empty the app runs
+in development mode and the verification code is printed to the server log
+(look for `verification code for <email> is <code>`), so the whole flow works
+with no mail account.
+
+To send real email with Gmail:
+
+1. Enable 2-Step Verification on the Google account.
+2. Create an **App Password** at https://myaccount.google.com/apppasswords.
+3. Set `NOTENEST_SMTP_USER` to the Gmail address and `NOTENEST_SMTP_PASSWORD`
+   to the 16-character app password (no spaces). `NOTENEST_SMTP_HOST` and
+   `NOTENEST_SMTP_PORT` already default to Gmail's.
+
+Any other SMTP provider (Brevo, a university mail server, and so on) works the
+same way by changing the host, port, user, and password.
 
 ## How to run tests
 
@@ -175,18 +211,25 @@ Health probe: `GET http://127.0.0.1:8000/health`.
 
 - `GET /api/v1/notes` - list, search, filter, sort, and paginate notes.
 - `POST /api/v1/notes` - upload a PDF with metadata (multipart form; requires
-  an authenticated session).
+  an authenticated session with a verified email).
 - `GET /api/v1/notes/{note_id}` - public metadata for one note.
 - `GET /api/v1/notes/{note_id}/download` - download the PDF.
-- `POST /api/v1/auth/register` - create an account and start a session.
+- `POST /api/v1/auth/register` - create an account, start a session, and email a
+  verification code.
 - `POST /api/v1/auth/login` - start a session.
 - `POST /api/v1/auth/logout` - end the session.
 - `GET /api/v1/auth/me` - the current user for an existing session.
+- `POST /api/v1/auth/verify-email` - confirm the email with the emailed code.
+- `POST /api/v1/auth/resend-otp` - send a new code (rate-limited by a cooldown).
 
 ## Authentication and security
 
 - Passwords are hashed with **Argon2id** (`argon2-cffi`) and never stored or
   returned in plain text.
+- **Email verification:** registration issues a 6-digit code. Only its Argon2
+  hash is stored; it expires after 10 minutes, allows a limited number of
+  wrong guesses, and resend is rate-limited to one per minute. Uploading
+  requires a verified email; everything else stays public.
 - A successful register/login issues a signed JWT session token
   (`PyJWT`, HS256) in an **HttpOnly** cookie (`notenest_session`), so frontend
   JavaScript can never read it. The cookie is `SameSite=Lax` and scoped to
@@ -199,7 +242,7 @@ Health probe: `GET http://127.0.0.1:8000/health`.
 - CORS allows credentials for the configured origins (never a wildcard with
   credentials).
 - Browsing, search, filters, detail, and downloads are public; only upload
-  requires a session.
+  requires a session (with a verified email).
 - For production, set `NOTENEST_SECRET_KEY` to a long random value, serve over
   HTTPS, and set `NOTENEST_COOKIE_SECURE=true`.
 
@@ -221,8 +264,8 @@ Health probe: `GET http://127.0.0.1:8000/health`.
   Any logged-in user can upload, and notes are not tied to a user or editable.
   Before any real public launch, add upload ownership, roles, abuse
   prevention, rate limiting, and content moderation.
-- **No password reset or email verification.** Accounts are email + password
-  only.
+- **No password reset.** Email verification exists, but there is no
+  forgot-password flow. Accounts are email + password only.
 - **No delete/edit.** Notes cannot be edited or removed through the API.
 - **SQLite + local files.** Suitable for development and a small demo, but not
   for concurrent production traffic.
@@ -286,6 +329,12 @@ Browser -> https://<app>.vercel.app              (static React app)
    | `NOTENEST_COOKIE_SAMESITE` | `none` |
    | `NOTENEST_SEED_ON_STARTUP` | `true` |
    | `NOTENEST_CORS_ORIGINS` | `https://<app>.vercel.app` |
+   | `NOTENEST_SMTP_USER` | your Gmail address (see the email-verification notes below) |
+   | `NOTENEST_SMTP_PASSWORD` | your 16-character Gmail **App Password** |
+
+   (`NOTENEST_SMTP_HOST`/`NOTENEST_SMTP_PORT` already default to Gmail. Leave
+   the two SMTP values unset to run in development mode, where codes are only
+   printed in the Render logs.)
 
 5. Deploy and note the service URL, for example
    `https://notenest-api.onrender.com`. Check `https://<service>/health`.
@@ -323,6 +372,10 @@ redeploy the backend so the Origin check and CORS allow it.
   session. Proxying the API through the frontend origin (a Vercel `rewrites`
   rule) avoids this by keeping the cookie first-party; it is not configured
   here and can be added later if sign-in proves flaky.
+- **Verification email:** set `NOTENEST_SMTP_USER`/`NOTENEST_SMTP_PASSWORD`
+  (a Gmail App Password) so real codes are delivered. Gmail's free limit is
+  plenty for a demo; without credentials the codes appear only in the Render
+  logs.
 
 ## Running a production build locally
 
@@ -337,7 +390,7 @@ npm run preview
 ```text
 backend/
   app/            FastAPI app, models, schemas, routers, file service,
-                  security, seed
+                  security, email, seed
   tests/          pytest suite (isolated temp DB and upload directory)
   requirements.txt
   .env.example    Backend environment placeholders

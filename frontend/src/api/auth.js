@@ -25,3 +25,15 @@ export function logoutUser() {
 export function getMe() {
   return requestJson('/auth/me')
 }
+
+export function verifyEmail(code) {
+  return requestJson('/auth/verify-email', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ code }),
+  })
+}
+
+export function resendOtp() {
+  return requestJson('/auth/resend-otp', { method: 'POST' })
+}

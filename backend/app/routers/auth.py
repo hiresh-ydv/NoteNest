@@ -7,17 +7,26 @@ token details, and the README for the cookie/CORS/CSRF configuration.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from jwt import PyJWTError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app import email as email_service
 from app import security
 from app.config import get_settings
 from app.database import get_session
 from app.models import User
-from app.schemas import UserLogin, UserRead, UserRegister
+from app.schemas import (
+    MessageResponse,
+    UserLogin,
+    UserRead,
+    UserRegister,
+    VerifyEmailRequest,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -28,6 +37,31 @@ def normalize_email(email: str) -> str:
     """Return the canonical stored form of an email address."""
 
     return email.strip().lower()
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Interpret naive datetimes (as SQLite returns) as UTC."""
+
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _issue_otp(user: User, session: Session) -> None:
+    """Create a fresh verification code for ``user`` and email it.
+
+    Only the hash is stored. Sending is best-effort: when SMTP is unconfigured
+    (development and tests) the code is written to the log instead.
+    """
+
+    code = security.generate_otp(settings.otp_length)
+    now = datetime.now(timezone.utc)
+    user.otp_hash = security.hash_password(code)
+    user.otp_expires_at = now + timedelta(seconds=settings.otp_ttl_seconds)
+    user.otp_attempts = 0
+    user.otp_last_sent_at = now
+    session.commit()
+    email_service.send_otp_email(user.email, code, settings)
 
 
 def _set_session_cookie(response: Response, user_id: int) -> None:
@@ -128,6 +162,7 @@ def register(
         ) from None
 
     session.refresh(user)
+    _issue_otp(user, session)
     _set_session_cookie(response, user.id)
     return UserRead.model_validate(user)
 
@@ -168,3 +203,85 @@ def logout() -> Response:
 @router.get("/me", response_model=UserRead, summary="Current user")
 def me(current_user: User = Depends(get_current_user)) -> UserRead:
     return UserRead.model_validate(current_user)
+
+
+@router.post(
+    "/verify-email",
+    response_model=UserRead,
+    summary="Verify the email address with a code",
+)
+def verify_email(
+    payload: VerifyEmailRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> UserRead:
+    """Confirm the signed-in user's email using the emailed one-time code."""
+
+    if current_user.email_verified:
+        return UserRead.model_validate(current_user)
+
+    if current_user.otp_hash is None or current_user.otp_expires_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No verification code is pending. Request a new one.",
+        )
+
+    if _as_utc(current_user.otp_expires_at) < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This code has expired. Request a new one.",
+        )
+
+    if current_user.otp_attempts >= settings.otp_max_attempts:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Request a new code.",
+        )
+
+    if not security.verify_password(current_user.otp_hash, payload.code.strip()):
+        current_user.otp_attempts += 1
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect code",
+        )
+
+    current_user.email_verified = True
+    current_user.otp_hash = None
+    current_user.otp_expires_at = None
+    current_user.otp_attempts = 0
+    session.commit()
+    session.refresh(current_user)
+    return UserRead.model_validate(current_user)
+
+
+@router.post(
+    "/resend-otp",
+    response_model=MessageResponse,
+    summary="Send a new verification code",
+)
+def resend_otp(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> MessageResponse:
+    """Issue a new code for the signed-in user, rate-limited by a cooldown."""
+
+    if current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This email is already verified.",
+        )
+
+    if current_user.otp_last_sent_at is not None:
+        elapsed = (
+            datetime.now(timezone.utc) - _as_utc(current_user.otp_last_sent_at)
+        ).total_seconds()
+        remaining = settings.otp_resend_cooldown_seconds - elapsed
+        if remaining > 0:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Please wait {int(remaining) + 1} seconds before requesting another code.",
+            )
+
+    _issue_otp(current_user, session)
+    return MessageResponse(detail="A new verification code has been sent.")

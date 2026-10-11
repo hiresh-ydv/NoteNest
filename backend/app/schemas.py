@@ -33,7 +33,20 @@ class UserRead(BaseModel):
 
     id: int
     email: str
+    email_verified: bool
     created_at: datetime
+
+
+class VerifyEmailRequest(BaseModel):
+    """Email-verification input: the one-time code the user was emailed."""
+
+    code: str = Field(min_length=4, max_length=8)
+
+
+class MessageResponse(BaseModel):
+    """A simple human-readable status message."""
+
+    detail: str
 
 
 class NoteBase(BaseModel):

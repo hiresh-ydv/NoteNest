@@ -36,6 +36,16 @@ class Settings:
     cookie_secure: bool
     cookie_samesite: str
     seed_on_startup: bool
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: str
+    smtp_from: str
+    smtp_use_tls: bool
+    otp_ttl_seconds: int
+    otp_length: int
+    otp_max_attempts: int
+    otp_resend_cooldown_seconds: int
 
 
 def _default_database_url() -> str:
@@ -83,4 +93,16 @@ def get_settings() -> Settings:
         cookie_secure=_env_bool("NOTENEST_COOKIE_SECURE", False),
         cookie_samesite=os.getenv("NOTENEST_COOKIE_SAMESITE", "lax"),
         seed_on_startup=_env_bool("NOTENEST_SEED_ON_STARTUP", False),
+        smtp_host=os.getenv("NOTENEST_SMTP_HOST", "smtp.gmail.com"),
+        smtp_port=int(os.getenv("NOTENEST_SMTP_PORT", "587")),
+        smtp_user=os.getenv("NOTENEST_SMTP_USER", ""),
+        smtp_password=os.getenv("NOTENEST_SMTP_PASSWORD", ""),
+        smtp_from=os.getenv("NOTENEST_SMTP_FROM", ""),
+        smtp_use_tls=_env_bool("NOTENEST_SMTP_USE_TLS", True),
+        otp_ttl_seconds=int(os.getenv("NOTENEST_OTP_TTL_SECONDS", "600")),
+        otp_length=int(os.getenv("NOTENEST_OTP_LENGTH", "6")),
+        otp_max_attempts=int(os.getenv("NOTENEST_OTP_MAX_ATTEMPTS", "5")),
+        otp_resend_cooldown_seconds=int(
+            os.getenv("NOTENEST_OTP_RESEND_COOLDOWN_SECONDS", "60")
+        ),
     )
